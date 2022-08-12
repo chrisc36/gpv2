@@ -23,8 +23,8 @@ def dump_json_object(dump_object, file_name, indent=2):
     json.dump(dump_object, f, indent=indent)
 
 
-T = TypeVar('T')
 K = TypeVar('K')
+T = TypeVar('T')
 
 
 def transpose_lists(lsts: Iterable[Iterable[T]]) -> List[List[T]]:

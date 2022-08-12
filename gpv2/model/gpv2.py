@@ -13,6 +13,7 @@ from torch.nn import functional as F
 import numpy as np
 from dataclasses import replace
 from gpv2.data.gpv_datasets import COCO_CATEGORIES
+from gpv2.data.webqa_templates import DefaultWebQueryGenerator
 from gpv2.image_featurizer.image_featurizer import ImageFeatureExtractor, ImageRegionFeatures
 from gpv2.model.allennlp_beamsearch import t5_initialize_decoding
 from gpv2.model.collate import CollateWithTokenizer
@@ -20,8 +21,7 @@ from gpv2.model.gpv_example import GPVExample
 from gpv2.model.layers import Layer, Linear
 from gpv2.model.loss import BoxPredictions, BasicGPVLoss
 from gpv2.model.model import GPVModel, build_per_example_output, BeamSearchSpec
-from gpv2.model.preprocess_example import ExamplePreprocessor, CaptioningPreprocessor, \
-  ClassificationPreprocessor, VqaPreprocessor, LocalizationPreprocessor
+from gpv2.model.preprocess_example import *
 from gpv2.model.t5_custom import OurT5ForConditionalGeneration
 from gpv2.utils import pytorch_utils
 
@@ -31,6 +31,13 @@ class CollateLocalizationLabels:
   tokenizer: PreTrainedTokenizer
 
   def collate(self, batch: List[GPVExample], out):
+    if len(batch) == 1 and isinstance(batch[0].relevance_query, list):
+      # Handle a case for where we run multiple relevance queries
+      # for one image for the purpose of visualization
+      labels = self.tokenizer(
+        batch[0].relevance_query, return_tensors='pt', padding=True, truncation=True)
+      return dict(relevance_queries=labels["input_ids"])
+
     # Get the tokenized labels for each detection example
     if not any(x.relevance_query is not None for x in batch):
       return {}
@@ -149,7 +156,8 @@ class T5GpvPerBox(GPVModel):
         CaptioningPreprocessor(),
         ClassificationPreprocessor(),
         VqaPreprocessor(),
-        LocalizationPreprocessor()
+        LocalizationPreprocessor(),
+        WebQaPreprocessor(DefaultWebQueryGenerator()),
       ]
     else:
       _process = self.preprocessors
@@ -412,6 +420,86 @@ class T5GpvPerBox(GPVModel):
 
     return box_scores
 
+  def predict_multi_relevance(
+      self, image_inputs, input_ids, input_mask, labels=None, relevance_queries=None,
+      no_box_sort=False, constrast_with_last=False
+
+  ):
+    encoder_outputs, input_mask, image_features = self._encode(image_inputs, input_ids, input_mask)
+    contextual_emb = encoder_outputs.last_hidden_state
+    device = contextual_emb.device
+
+    if not self.predict_trailing_pad_tokens:
+      # -100 marks a label as not a target
+      relevance_queries = relevance_queries.masked_fill(
+        relevance_queries == self.tokenizer.pad_token_id, -100)
+
+    n_rel, rel_len = relevance_queries.size()
+
+    assert contextual_emb.size(0) == 1
+    if image_features.n_boxes is None:
+      n = image_features.boxes.size(1) - 1
+    else:
+      n = image_features.n_boxes[0] - 1  # (-1 excludes the query box)
+
+    # [n_boxes, 1, embed_dim]
+    inputs_embed = contextual_emb[0, :n].unsqueeze(1)
+
+    # [n_boxes*n_rel, 1, embed_dim]
+    inputs_embed = inputs_embed.repeat(len(relevance_queries), 1, 1)
+
+    # [n_rel, rel_len]
+    output_ids = relevance_queries
+    # [n_boxes*n_rel, rel_len]
+    output_ids = output_ids.unsqueeze(0).repeat(n, 1, 1).view(n*n_rel, -1)
+
+    t5_out = self.model(
+      encoder_outputs=(inputs_embed,),
+      labels=output_ids,
+      return_dict=True,
+    )
+    dim = t5_out.logits.size(-1)
+    per_label_score = F.cross_entropy(
+      t5_out.logits.view(-1, dim), output_ids.view(-1), reduction="none")
+
+    per_label_score = -per_label_score.view(n, n_rel, rel_len)
+    per_label_score = per_label_score.sum(-1)
+
+    if constrast_with_last:
+      contrast = per_label_score[:, -1:].repeat(1, n_rel-1)
+      box_rel = torch.stack([per_label_score[:, :-1], contrast], -1)
+
+      if self.convert_to_relevance == "raw":
+        box_scores = self.relevance_rescale(box_rel)
+
+      elif self.convert_to_relevance == "sigmoid-logits":
+        if len(box_rel.size()) == 2:
+          assert torch.all(torch.isfinite(box_rel))
+          box_rel = pytorch_utils.log_prob_to_logits(box_rel)
+          assert torch.all(torch.isfinite(box_rel))
+        else:
+          box_rel = torch.log_softmax(box_rel, -1)
+
+        # Re-calibrate now [batch, n_boxes, 2] logits
+        box_scores = self.relevance_rescale(box_rel)
+      else:
+        raise NotImplementedError(self.convert_to_relevance)
+
+      objectness = self._get_rel_logprob(image_features.objectness[:, :-1])
+
+      if self.combine_with_objectness == "none":
+        pass
+      elif self.combine_with_objectness == "multiply":
+        box_scores = F.log_softmax(box_scores, -1)
+        box_scores = objectness.squeeze(0).unsqueeze(1) + box_scores
+        box_scores = box_scores.softmax(-1)[:, :, 0]
+      else:
+        raise NotImplementedError()
+      return box_scores, per_label_score[:, -1]
+    else:
+      return per_label_score
+
+
   def compute_per_box_score(
       self, contextual_emb, n_boxes, relevance_query, input_mask,
       include_query=False
@@ -583,7 +671,6 @@ class T5GpvPerBox(GPVModel):
           answer_options, return_tensors='pt', padding=True, max_length=self.model.config.n_positions)
         labels = tokenized_answers["input_ids"].to(device)
         if not self.predict_trailing_pad_tokens:
-          # -100 marks a label as not a target
           labels = labels.masked_fill(labels == self.tokenizer.pad_token_id, -100)
         self.register_buffer("answer_ids", labels, persistent=False)
       else:
@@ -660,10 +747,17 @@ class T5GpvPerBox(GPVModel):
       dec_len = labels.size(1)
       if self.mask is not None:
         t5_out.logits = F.log_softmax(t5_out.logits, -1) + self.mask
+
+      # vqa_rationale_gen = any(isinstance(x, VqaRationaleTargetPreprocessor) for x in self.preprocessors)
+      # import pdb; pdb.set_trace()
+      # if vqa_rationale_gen:
+      #   labels = labels.masked_fill(labels == self.tokenizer.eos_token_id, -100)
+
       per_answer_loss = F.cross_entropy(
         t5_out.logits.view(n_queries*n_answers*dec_len, -1),
         labels.view(n_queries*n_answers*dec_len), reduction="none"
       ).view(n_queries, n_answers, dec_len)
+
       per_answer_loss = per_answer_loss.sum(-1).cpu().numpy()
       answer_ranks = np.argsort(per_answer_loss, axis=1)
       out_text = []

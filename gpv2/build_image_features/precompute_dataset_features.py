@@ -1,13 +1,17 @@
 import argparse
 import logging
 from collections import defaultdict
+from os.path import exists
 
-from gpv2.data.dataset import Task
+from gpv2.data.dataset import Task, LocalizationExample
 from gpv2.data.dce_dataset import DceDataset
 from gpv2.data.gpv_datasets import GpvDataset
+from gpv2.data.grit import GritDataset
 from gpv2.data.webqa_dataset import WebQaDataset
 from gpv2.build_image_features.compute_features import add_args, ExtractionTarget, run
 import numpy as np
+
+from gpv2.utils import py_utils, image_utils
 
 
 def main():
@@ -27,6 +31,25 @@ def main():
     for split in ["train", "test", "val"]:
       for ex in WebQaDataset(split).load():
         queries[(ex.image_id, None)].add(default_query_box)
+
+  elif args.dataset == "grit":
+    for split in ["ablation", "test"]:
+      for cat in ["localization", "categorization", "vqa", "refexp"]:
+        for ex in GritDataset(cat, split).load():
+          if cat == "categorization":
+            w, h = image_utils.get_image_size(ex.image_id)
+            queries[(ex.image_id, None)].add(tuple(ex.query_box))
+            queries[(ex.image_id, None)].add((0, 0, w, h))
+          else:
+            queries[(ex.image_id, None)].add(default_query_box)
+
+  # elif args.dataset == "grit-cat":
+  #   for split in ["ablation", "test"]:
+  #     for ex in GritDataset("categorization", split).load():
+  #       assert ex.query_box is not None
+  #       w, h = image_utils.get_image_size(ex.image_id)
+  #       queries[(ex.image_id, None)].add(tuple(ex.query_box))
+  #       queries[(ex.image_id, None)].add((0, 0, w, h))
 
   elif args.dataset.startswith("opensce"):
     logging.info("Running on OpenSCE")
@@ -61,12 +84,14 @@ def main():
             crop = tuple(ex.crop)
           queries[(ex.image_id, crop)].add(qbox)
   else:
-    raise NotImplementedError(args.image_source)
+    raise NotImplementedError(args.dataset)
 
   for (image_id, crop), parts in queries.items():
     parts = [x for x in parts if x is not None]
     qboxes = np.array(parts, dtype=np.float32) if parts else None
-    targets.append(ExtractionTarget(image_id, None, crop, qboxes))
+    image_f = image_utils.get_image_file(image_id)
+    assert exists(image_f)
+    targets.append(ExtractionTarget(image_id, image_f, crop, qboxes))
   logging.info(f"Running on {len(targets)} images")
   run(targets, args)
 

@@ -1,17 +1,21 @@
 import json
 import logging
 from datetime import datetime
-from os.path import isdir
+from os.path import isdir, join
 from typing import Tuple, Any, Callable, Dict
 
+from gpv2 import file_paths
 from gpv2.data.dataset import Dataset, Task, CaptioningExample
 from gpv2.data.dce_dataset import DceDataset
 from gpv2.data.gpv_datasets import GpvDataset, COCO_CATEGORIES
+from gpv2.data.webqa_dataset import WebQaDataset
+from gpv2.experimental.boosting_eval import BoostingDceClsEvaluator
+from gpv2.experimental.okvqa import OkVqa
 from gpv2.data.synonyms import SYNONYMS
 from gpv2.train.evaluator import Evaluator, VqaEvaluator, CaptionEvaluator, LocalizationEvaluator, \
-  ClsEvaluator, DceClsEvaluator, DceVqaEvaluator, ResultKey
+  ClsEvaluator, DceClsEvaluator, DceVqaEvaluator, ResultKey, WebQaEvaluator
 from gpv2.utils import py_utils
-from gpv2.utils.py_utils import dump_json_object
+from gpv2.utils.py_utils import dump_json_object, load_json_object
 from gpv2.utils.to_params import to_params
 
 
@@ -36,11 +40,39 @@ def save_evaluation(prefix_or_dir: str, evaluator: Evaluator, stats: Dict[Result
   dump_json_object(to_save, cache_file)
 
 
+def get_webqa_is_verified(part):
+  assert part in {"test", "val"}
+  src = join(file_paths.WEBQA_DIR, f"{part}_image_info_turk_verified.json")
+  logging.info(f"Loading {src}")
+  data = load_json_object(join(file_paths.WEBQA_DIR, f"{part}_image_info_turk_verified.json"))
+  verified = set(("web/"+x["image"]["image_id"], x["noun"], x["verb"], x["adj"]) for x in data)
+  def is_verified(ex):
+    return (ex.image_id, ex.noun, ex.verb, ex.adj) in verified
+  return is_verified
+
+
 def get_evaluator(dataset: Dataset) -> Tuple[Evaluator, Callable]:
   """Gets the Evaluator and optionally a function to map examples to subset for `dataset`
 
   Returns None if the dataset requires a test-server evaluations.
   """
+
+  if isinstance(dataset, OkVqa):
+    return VqaEvaluator(strip_rationales=True), None
+
+  if isinstance(dataset, WebQaDataset):
+    is_verified = get_webqa_is_verified(dataset.split)
+
+    def get_subsets(x):
+      qtype = x.qtype
+      subsets = [qtype, qtype[1:]]
+      if qtype[1:] in "nva":
+        subsets.append("nva")
+      if not is_verified(x):
+        subsets = [f"unverified-{x}" for x in qtype]
+      return subsets
+
+    return WebQaEvaluator(), get_subsets
 
   if isinstance(dataset, DceDataset):
     if dataset.task == Task.CAPTIONING:
@@ -63,6 +95,7 @@ def get_evaluator(dataset: Dataset) -> Tuple[Evaluator, Callable]:
       get_subsets = None
 
     cls_eval = DceClsEvaluator()
+    cls_eval = BoostingDceClsEvaluator(list(range(0, 20)), False, 20, cls_eval)
     return {
              Task.CLS: cls_eval,
              Task.LOCALIZATION: LocalizationEvaluator(),

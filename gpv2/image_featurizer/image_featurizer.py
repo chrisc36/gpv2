@@ -29,7 +29,7 @@ class ImageRegionFeatures:
   """Object boxes, features, and objectness scores for objects in an image"""
 
   @staticmethod
-  def build_from_lists(boxes, features, objectness):
+  def build_from_lists(boxes, features, objectness) -> 'ImageRegionFeatures':
     n_boxes = [len(x) for x in boxes]
     max_len = max(n_boxes)
     n_boxes = torch.as_tensor(n_boxes, dtype=torch.long, device=boxes[0].device)

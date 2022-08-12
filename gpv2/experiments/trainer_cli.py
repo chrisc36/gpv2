@@ -104,7 +104,9 @@ def get_trainer_from_args(
   eval_datasets = []
   tasks = {}  # Use a dictionary to preserve ordering with uniqueness
   for dataset in args.task:
-    if dataset == "all":
+    if dataset == "none":
+      pass
+    elif dataset == "all":
       tasks.update({x: None for x in Task})
     elif dataset == "non-cls":
       tasks.update({x: None for x in [Task.VQA, Task.CAPTIONING, Task.DETECTION]})

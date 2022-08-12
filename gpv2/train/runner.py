@@ -24,31 +24,6 @@ from gpv2.utils.pytorch_utils import QueueDataset
 from gpv2.utils.to_params import to_params_any
 
 
-class GPVExampleOutputHdf5:
-  def __init__(self, dataset, text: Optional[List[str]], text_logprobs: Optional[List[float]]):
-    self.text = text
-    self.text_logprobs = text_logprobs
-    self.dataset = dataset
-    self._boxes = None
-    self._rel = None
-
-  @property
-  def boxes(self) -> Optional[np.ndarray]:
-    if self.dataset is None:
-      return None
-    if self._boxes is None:
-      self._boxes = self.dataset["boxes"][:]
-    return self._boxes
-
-  @property
-  def relevance(self) -> Optional[np.ndarray]:
-    if self.dataset is None:
-      return None
-    if self._rel is None:
-      self._rel = self.dataset["relevance"][:]
-    return self._rel
-
-
 def save_gpv_output(output: Dict[str, GPVExampleOutput], output_dir):
   predictions = {}
   boxes_h5py = h5py.File(output_dir + "/boxes.hdf5", "w")
@@ -76,10 +51,7 @@ def load_gpv_predictions(output_dir, load_boxes=False, target_ids=None):
     out = {}
     for k, pred in list(data.items()):
       ds = f[k]
-      if load_boxes == "hdf5":
-        out[k] = GPVExampleOutputHdf5(ds, pred["answer"], pred["probs"])
-      else:
-        out[k] = GPVExampleOutput(ds["boxes"][:], ds["relevance"][:], pred["answer"], pred["probs"])
+      out[k] = GPVExampleOutput(ds["boxes"][:], ds["relevance"][:], pred["answer"], pred["probs"])
     return out
   else:
     return {k: GPVExampleOutput(None, None, v["answer"], v["probs"]) for k, v in data.items()}
@@ -209,6 +181,9 @@ def run_dist(model_source, examples, devices,
   return out
 
 
+MULTIPLE_CHOICE = []
+
+
 def run_model(
     model, data_loader, beams_to_keep=1,
     desc="eval", nopbar=False, model_device=None,
@@ -232,6 +207,14 @@ def run_model(
     it = tqdm(data_loader, desc=desc, ncols=100)
 
   for examples, batch in it:
+    if MULTIPLE_CHOICE:
+      assert len(examples) == 1
+      meta = examples[0].meta
+      if "all-answers" in meta:
+        candidates = meta["all-answers"]
+      else:
+        candidates = meta['distractors'] + [meta["mc_correct_answer"]]
+      model.set_prediction_args(answer_options=candidates, rerank_answer_options=True)
     batch = pytorch_utils.to_device(batch, model_device)
     with torch.no_grad():
       output = model.predict(**batch)
@@ -241,7 +224,6 @@ def run_model(
   return out
 
 
-# This needs to be a top-level class so it can be distributed
 @dataclass
 class CollateWithBatch(Callable):
   collate: Callable

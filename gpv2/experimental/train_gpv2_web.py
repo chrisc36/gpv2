@@ -8,21 +8,18 @@ import torch.utils.data
 from transformers import AutoConfig
 
 from gpv2.data.dataset import Task, WebQaExample
-from gpv2.data.refcoco import RefCocoPlus
 from gpv2.data.webqa_dataset import WebQaDataset
 from gpv2.data.webqa_templates import DefaultWebQueryGenerator
 from gpv2.experiments.trainer_cli import add_train_args, get_trainer_from_args, \
   run_trainer_from_args
-from gpv2.image_featurizer.faster_rcnn_feature_loader import RcnnHdf5FeatureExtractor
 from gpv2.image_featurizer.precomputed_features import Hdf5FeatureExtractor
 from gpv2.model.gpv2 import T5GpvPerBox
 from gpv2.model.layers import Linear, BasicBoxEmbedder
 from gpv2.model.loss import DetrLocalizationLoss, LocalizationLoss, BasicGPVLoss
 from gpv2.model.model import BeamSearchSpec
 from gpv2.model.preprocess_example import WebQaPreprocessor, LocalizationPreprocessor, \
-  VqaPreprocessor, ClassificationPreprocessor, CaptioningPreprocessor, \
-  ReferringExpressionQueryPreprocessor
-from gpv2.train.evaluator import WebQaEvaluator, ResultKey, RefExpEvaluator
+  VqaPreprocessor, ClassificationPreprocessor, CaptioningPreprocessor
+from gpv2.train.evaluator import WebQaEvaluator, ResultKey
 from gpv2.train.optimizer import DelayedWarmupScheduleBuilder, AdamWBuilder, OptimizerBuilder, \
   ParameterGroup, AllParameters
 from gpv2.train.trainer import Trainer, EvaluationSetup, TrainerDataset
@@ -36,8 +33,6 @@ def main():
   parser = ArgumentParser()
   parser.add_argument("--model", choices=["t5-small", "t5-base", "t5-large"], default=None)
   parser.add_argument("--init_from")
-  parser.add_argument("--save_each_epoch", action="store_true")
-  parser.add_argument("--no_find_unused", action="store_true")
   parser.add_argument("--lr", type=float, default=3e-4)
   parser.add_argument("--weight_decay", type=float, default=1e-4)
   parser.add_argument("--webqa_sample", type=float, default=1.0)
@@ -45,7 +40,7 @@ def main():
 
   add_train_args(
     parser, tasks=list(Task), epochs=8,
-    clip_grad_norm=None, num_workers=2, batch_size=60)
+    clip_grad_norm=None, num_workers=4, batch_size=60)
   args = parser.parse_args()
 
   py_utils.add_stdout_logger()
@@ -66,8 +61,7 @@ def main():
   model = T5GpvPerBox(
     args.model,
     loss=BasicGPVLoss(localization_loss),
-    # image_feature_extractor=Hdf5FeatureExtractor("vinvl", BasicBoxEmbedder()),
-    image_feature_extractor=RcnnHdf5FeatureExtractor("rcnn", BasicBoxEmbedder()),
+    image_feature_extractor=Hdf5FeatureExtractor("vinvl", BasicBoxEmbedder()),
     image_joiner=Linear(2048+5, t5_dim),
     all_lower_case=True,
     initialize_from=args.init_from,
@@ -80,8 +74,7 @@ def main():
       CaptioningPreprocessor(),
       ClassificationPreprocessor(),
       VqaPreprocessor(),
-      LocalizationPreprocessor(),
-      ReferringExpressionQueryPreprocessor()
+      LocalizationPreprocessor()
     ]
   )
 
@@ -106,6 +99,7 @@ def main():
     args, logging_ema=0.995,
     optimizer=optimizer, scheduler=scheduler
   )
+  trainer.save_each_epoch = True
 
   if args.webqa_subset:
     qtypes = args.webqa_subset
@@ -128,20 +122,6 @@ def main():
       webqa_val, "webqa-val", eval_sample=50 if args.debug else 12000, eval_setup=webqq_eval))
     trainer.best_model_key.append(ResultKey("accuracy", dataset_name="webqa-val"))
 
-  evaluator = RefExpEvaluator()
-  eval_setup = EvaluationSetup(evaluator, dict(beam_search_spec=BeamSearchSpec(1, 10)))
-  trainer.train_datasets.append(
-    TrainerDataset(
-      RefCocoPlus("train", 200 if args.debug else None), "train", eval_setup=eval_setup,
-      eval_sample=None if args.debug else 3000
-    )
-  )
-  trainer.eval_datasets.append(
-    TrainerDataset(RefCocoPlus("val", 100 if args.debug else None), "val", eval_setup=eval_setup)
-  )
-
-  trainer.save_each_epoch = args.save_each_epoch
-  trainer.find_unused_parameters = False
   run_trainer_from_args(trainer, model, args)
 
 

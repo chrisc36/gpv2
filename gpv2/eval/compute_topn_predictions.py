@@ -9,6 +9,7 @@ import h5py
 from gpv2.data.dataset import Task, Dataset
 from gpv2.data.dce_dataset import DceDataset
 from gpv2.data.gpv_datasets import GpvDataset
+from gpv2.data.grit import GritDataset
 from gpv2.data.webqa_dataset import WebQaDataset
 from gpv2.eval.dataset_cli import get_datasets_from_args, add_dataset_args
 from gpv2.eval.evaluation import get_evaluator, save_evaluation
@@ -35,7 +36,7 @@ DEFAULT_MAX_SEQ_LEN = {
 
 
 def get_default_seq_len(ds: Dataset):
-  if isinstance(ds, (GpvDataset, DceDataset)):
+  if isinstance(ds, (GpvDataset, DceDataset, GritDataset)):
     return DEFAULT_MAX_SEQ_LEN[ds.task]
   elif isinstance(ds, WebQaDataset):
     return 8
@@ -108,6 +109,12 @@ def eval_on(args, run_dir, dataset, devices, skip_existing=True):
       logging.info("Classification so keeping 20 beams")
       beams_to_keep = 20
 
+  if isinstance(dataset, GritDataset) and dataset.task == Task.CLS:
+    answer_options = dataset.get_answer_options()
+    prediction_args["answer_options"] = answer_options
+    logging.info("Classification so keeping 20 beams")
+    beams_to_keep = 20
+
   if do_rerank and prediction_args.get("answer_options"):
     logging.info(f"Re-ranking answer options")
     logging.info(f"Reducing batch size to 5")
@@ -162,6 +169,8 @@ def eval_on(args, run_dir, dataset, devices, skip_existing=True):
     else:
       logging.info("Evaluating...")
     evaluator, subsets = get_evaluator(dataset)
+    # from gpv2.train.evaluator import WebQaEvaluator
+    # evaluator, subsets = WebQaEvaluator(), None
 
     results = evaluator.evaluate(examples, output, allow_partial=True, subset_mapping=subsets)
     k = [k for k in results if k.metric_name == "n"]
@@ -197,12 +206,16 @@ def main():
   parser.add_argument("--output_name",
                       help="Save results in model/run/eval/{dataset_name}--{output_name}")
   parser.add_argument("--dry_run", action="store_true")
+  parser.add_argument("--mc", action="store_true")
   parser.add_argument("--rank_answer_options", default="always",
                       choices=["never", "always"],
                       help="When to use answer options ranking for classification")
   args = parser.parse_args()
 
   py_utils.add_stdout_logger()
+  if args.mc:
+    from gpv2.train import runner
+    runner.MULTIPLE_CHOICE.append("yes")
 
   if args.output_dir and args.output_name:
     raise ValueError("Cannot specify output_name and output_dir")
@@ -224,6 +237,7 @@ def main():
       raise ValueError("Cannot use one output dir if more than one dataset is selected!")
     if len(datasets) == 0:
       raise ValueError("No datasets is selected!")
+
     eval_on(args, model, datasets[0], devices, skip_existing=False)
 
   else:

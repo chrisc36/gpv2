@@ -18,6 +18,7 @@ IMAGE_SOURCE_MAP = {
   "coco": file_paths.COCO_IMAGES,
   "web": file_paths.WEB_IMAGES_DIR,
   "dce": file_paths.DCE_IMAGES,
+  "grit": file_paths.GRIT_IMAGES,
 }
 
 

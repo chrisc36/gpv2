@@ -41,6 +41,8 @@ class GPVExample:
   """Meta-data about this example"""
   meta: Any = None
 
+  task: Any = None
+
   def get_gpv_id(self):
     return self.id
 

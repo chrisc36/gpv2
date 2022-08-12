@@ -51,7 +51,7 @@ class WebQaDataset(Dataset):
   }
 
   def __init__(self, split: str, sample=None, qtypes="basic"):
-    if split not in {"test", "val", "train"}:
+    if split not in {"test", "val", "train", "valv", "testv"}:
       raise ValueError(split)
     if isinstance(qtypes, str):
       self.qtypes = self.QTYPES_NAME_TO_TYPES[qtypes]
@@ -100,9 +100,17 @@ def _intern(x):
 
 
 def load_webqa(split, qtypes):
-  file = join(file_paths.WEBQA_DIR, split + "_image_info.json")
-
+  if split == "valv":
+    file = join(file_paths.WEBQA_DIR, "val_image_info_turk_verified.json")
+  elif split == "testv":
+    file = join(file_paths.WEBQA_DIR, "test_image_info_turk_verified.json")
+  else:
+    file = join(file_paths.WEBQA_DIR, split + "_image_info.json")
   prefix = "web" if split == "val" else f"web-{split}"
+  return load_webqa_file(file, qtypes, prefix)
+
+
+def load_webqa_file(file, qtypes, prefix):
   logging.info(f"Loading webqa data from {file}")
   raw_instances = load_json_object(file)
   out = []
@@ -111,6 +119,8 @@ def load_webqa(split, qtypes):
       image_id = x["image"]["image_id"]
     else:
       image_id = x["image"]
+
+    image_id = "web/" + image_id
 
     ex = WebQaExample(
       None, image_id, None,

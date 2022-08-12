@@ -3,7 +3,6 @@ from typing import List, Union, Optional, Tuple, Dict, Counter, Any
 
 from allennlp.common import Registrable, FromParams
 from dataclasses import dataclass
-
 import numpy as np
 
 
@@ -132,7 +131,7 @@ class VqaExample:
   gpv_id: str
   image_id: str
   question: str
-  answers: Union[str, Counter]
+  answers: Union[str, Counter, None]
   meta: Optional[Dict] = None
 
   def get_gpv_id(self):
@@ -146,7 +145,6 @@ class LocalizationExample:
 
   """[x, y, w, h] un-normalized format"""
   bboxes: np.ndarray
-
   """Object name these boxes are for"""
   category: str
   meta: Optional[Dict] = None
@@ -179,6 +177,17 @@ class CaptioningExample:
   @property
   def crop(self):
     return None
+
+  def get_gpv_id(self):
+    return self.gpv_id
+
+
+@dataclass(frozen=True)
+class ReferringExpressionExample:
+  gpv_id: str
+  image_id: str
+  sentences: List[str]
+  bbox: Optional[List[float]] = None
 
   def get_gpv_id(self):
     return self.gpv_id

@@ -6,6 +6,7 @@ import numpy as np
 
 
 import torch
+import torchvision.ops
 from allennlp.common import FromParams, Registrable
 from dataclasses import dataclass, replace
 from pycocoevalcap.bleu.bleu import Bleu
@@ -19,7 +20,7 @@ from gpv2.data.synonyms import SYNONYMS
 from gpv2.model.model import GPVExampleOutput
 from gpv2.train.vqa2_eval_data import punct, periodStrip, commaStrip, manualMap, articles, \
   contractions
-from gpv2.utils import py_utils
+from gpv2.utils import py_utils, image_utils
 from gpv2.utils.image_utils import get_image_size
 from gpv2.utils.quiet_ptbtokenizer import QuitePTBTokenizer
 
@@ -110,16 +111,40 @@ class PerExampleEvaluator(Evaluator):
     return out
 
 
+@Evaluator.register("ref-evaluator")
+class RefExpEvaluator(PerExampleEvaluator):
+
+  def evaluate_examples(self, examples: List, predictions: Dict[str, GPVExampleOutput]) -> List[Dict[str, Number]]:
+    out = []
+    for ex in examples:
+      pred = predictions[ex.gpv_id]
+      w, h = image_utils.get_image_size(ex.image_id)
+      pred_box = pred.boxes[np.argmax(pred.relevance)]
+      pred_box = pred_box*np.array([w, h, w, h])
+      pred_box = torch.as_tensor(pred_box).unsqueeze(0)
+      pred_box = torchvision.ops.box_convert(pred_box, "cxcywh", "xyxy")
+      target_box = torch.as_tensor(ex.bbox).unsqueeze(0)
+      target_box = torchvision.ops.box_convert(target_box, "xywh", "xyxy")
+      iou = float(torchvision.ops.box_iou(pred_box, target_box)[0, 0])
+      out.append(dict(iou=iou, acc=iou>0.5))
+    return out
+
+
 @Evaluator.register("vqa-evaluator")
 class VqaEvaluator(PerExampleEvaluator):
+
+  def __init__(self, strip_rationales=False):
+    self.strip_rationales = strip_rationales
 
   def evaluate_examples(self, examples: List[VqaExample],
                         predictions: Dict[str, GPVExampleOutput], add_scores=False):
     out = []
     for example in examples:
       answer = predictions[example.gpv_id].text[0]
+      if self.strip_rationales and ". because" in answer:
+        answer = answer[:answer.find(".")]
       score = vqa_score(answer.lower(), example.answers)
-      out.append(dict(score=score))
+      out.append(dict(score=score, exact=answer.lower() == example.meta["mc_correct_answer"]))
     return out
 
 
@@ -141,8 +166,7 @@ class WebQaEvaluator(PerExampleEvaluator):
     out = []
     for example in examples:
       answer = predictions[example.get_gpv_id()].text[0].lower()
-      gt_answer = SYNONYMS[example.answer] if example.answer in SYNONYMS else [example.answer]
-      out.append(dict(accuracy=answer in gt_answer))
+      out.append(dict(accuracy=answer == example.answer))
     return out
 
 

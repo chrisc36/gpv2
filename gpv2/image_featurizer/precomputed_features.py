@@ -30,12 +30,12 @@ def find_query_boxes(hdf5_group, query_boxes, image_id=None, extract_features=Tr
     match_ix = np.where(matches[i])[0]
     if len(match_ix) == 0:
       if image_id is None:
-        print(query_boxes)
-        print(saved_boxes)
+        print("q", query_boxes)
+        print("s", saved_boxes)
         raise ValueError(f"Unable to locate a required query box")
       else:
-        print(query_boxes)
-        print(saved_boxes)
+        print("q", query_boxes)
+        print("s", saved_boxes)
         raise ValueError(f"Unable to locate a required query box for image {image_id}")
     q_ixs.append(match_ix[0])
 
@@ -85,6 +85,7 @@ _COCO_IMAGE_ID_MAP = {}
 #
 #   raise NotImplementedError(hdf5_key)
 
+
 class PrecomputedDataLoader:
   """Utility class that gathers pre-computed data and targets of a batch"""
 
@@ -93,6 +94,8 @@ class PrecomputedDataLoader:
     self.extract_objectness = extract_objectness
     self.extract_features = extract_features
     self.key_to_ix = None
+    if len(box_sources) == 0:
+      raise ValueError()
     if self.box_sources != "debug" and len(self.box_sources) > 1:
       self.key_to_ix = {}
       for ix, file in enumerate(self.box_sources):
@@ -233,6 +236,7 @@ class Hdf5FeatureExtractor(ImageFeatureExtractor):
     self.extract_objectness = extract_objectness
     self.source = source
     self.image_id_version = image_id_version
+
     if isinstance(source, str):
       src = image_utils.get_hdf5_files(self.source)
     else:

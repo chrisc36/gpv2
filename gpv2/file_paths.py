@@ -8,7 +8,7 @@ WEBQA_DIR = join(DATA_DIR, "webqa")
 
 
 # Where the GPV data is located, compatible with the GPV1 data
-GPV_DIR = join(DATA_DIR, "gpv-dbg")
+GPV_DIR = join(DATA_DIR, "gpv")
 GPV_DATA_DIR = join(GPV_DIR, "learning_phase_data")
 COCO_IMAGES = join(GPV_DATA_DIR, "coco/images")
 
@@ -22,6 +22,7 @@ IMSITU_IMAGE_DIR = None
 WEB_IMAGES_DIR = None
 DCE = join(DATA_DIR, "dce")
 DCE_IMAGES = join(DCE, "images")
+REF_COCO_HOME = join(DATA_DIR, "refcoco")
 
 VINVL_STATE = join(DATA_DIR, "vinvl", "R50C4_4setsvg_005000_model.roi_heads.score_thresh_0.2.pth")
 NOCAPS_TEST_IMAGE_INFO = join(DCE, "nocaps_test_image_info.json")
@@ -29,3 +30,7 @@ NOCAPS_VAL_IMAGE_INFO = join(DCE, "nocaps_val_image_info.json")
 
 if not exists(CACHE_DIR):
   mkdir(CACHE_DIR)
+
+OKVQA2_HOME = join(DATA_DIR, "okvqa2")
+GRIT_HOME = join(DATA_DIR, "grit_official_data", "GRIT")
+GRIT_IMAGES = join(GRIT_HOME, "images")
